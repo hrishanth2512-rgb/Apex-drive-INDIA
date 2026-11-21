@@ -1,1 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Apex Drive: India — 3D Open-World Driving Simulator</title>
+  <meta name="description" content="Apex Drive: India is a browser-based 3D open-world driving simulator built with HTML and Three.js. Drive sports and supercar silhouettes across Indian avenues and flyovers with heavy congestion, pileups, camera views, damage repair, and 1-to-5 star police chases." />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #12161f; font-family: system-ui, -apple-system, sans-serif; color: #fff; }
+    #game-canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+    #hud { position: fixed; top: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; align-items: flex-start; pointer-events: none; z-index: 10; }
+    .panel { background: rgba(15, 20, 30, 0.72); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.14); border-radius: 12px; padding: 10px 14px; pointer-events: auto; }
+    .title-badge { font-weight: 800; letter-spacing: 0.5px; font-size: 15px; color: #ffb703; }
+    .sub-badge { font-size: 12px; opacity: 0.85; margin-top: 2px; }
+    .stars { font-size: 16px; color: #ffd166; letter-spacing: 2px; margin-top: 4px; }
+    .controls-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+    button { background: rgba(255,255,255,0.12); color: #fff; border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; padding: 6px 10px; font-size: 12px; font-weight: 600; cursor: pointer; }
+    button:active { transform: scale(0.97); }
+    #touch-controls { position: fixed; bottom: 18px; left: 18px; right: 18px; display: flex; justify-content: space-between; align-items: flex-end; z-index: 10; pointer-events: none; }
+    .pad { display: flex; gap: 10px; pointer-events: auto; }
+    .touch-btn { width: 58px; height: 58px; border-radius: 50%; background: rgba(18, 24, 38, 0.72); border: 1px solid rgba(255,255,255,0.24); color: #fff; font-size: 18px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  </style>
+</head>
+<body>
+  <canvas id="game-canvas"></canvas>
+  <div id="hud">
+    <div class="panel">
+      <div class="title-badge">APEX DRIVE: INDIA</div>
+      <div class="sub-badge" id="telemetry">Speed: 0 km/h • Cam: Chase • Traffic: High</div>
+      <div class="stars" id="wanted-stars">☆☆☆☆☆</div>
+      <div class="controls-row">
+        <button id="cam-btn">Camera</button>
+        <button id="traffic-btn">Traffic: High</button>
+        <button id="repair-btn">Repair</button>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="sub-badge">WASD / Arrows or Touch</div>
+      <div class="sub-badge" id="integrity">Integrity: 100%</div>
+    </div>
+  </div>
+  <div id="touch-controls">
+    <div class="pad">
+      <button class="touch-btn" id="btn-left">◀</button>
+      <button class="touch-btn" id="btn-right">▶</button>
+    </div>
+    <div class="pad">
+      <button class="touch-btn" id="btn-brake">■</button>
+      <button class="touch-btn" id="btn-gas">▲</button>
+    </div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.169.0/build/three.module.js';
+
+    const canvas = document.getElementById('game-canvas');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.08;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xf4b87a);
+    scene.fog = new THREE.FogExp2(0xf4b87a, 0.0022);
+
+    const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.2, 600);
+    const sunLight = new THREE.DirectionalLight(0xffe1b5, 2.4);
+    sunLight.position.set(60, 85, 45);
+    scene.add(sunLight);
+    scene.add(new THREE.HemisphereLight(0x9ec5ff, 0x4b463f, 0.95));
+
+    const road = new THREE.Mesh(
+      new THREE.PlaneGeometry(44, 1600),
+      new THREE.MeshStandardMaterial({ color: 0x26292e, roughness: 0.78, metalness: 0.1 })
+    );
+    road.rotation.x = -Math.PI / 2;
+    scene.add(road);
+
+    const lineMat = new THREE.MeshBasicMaterial({ color: 0xf6d365 });
+    for (let z = -780; z <= 780; z += 18) {
+      const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.35, 7), lineMat);
+      dash.rotation.x = -Math.PI / 2;
+      dash.position.set(0, 0.02, z);
+      scene.add(dash);
+    }
+
+    const player = new THREE.Group();
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(2.1, 0.85, 4.5),
+      new THREE.MeshPhysicalMaterial({ color: 0xe63946, metalness: 0.65, roughness: 0.22, clearcoat: 1.0 })
+    );
+    body.position.y = 0.75;
+    const cabin = new THREE.Mesh(
+      new THREE.BoxGeometry(1.75, 0.62, 2.1),
+      new THREE.MeshStandardMaterial({ color: 0x18202c, metalness: 0.4, roughness: 0.15 })
+    );
+    cabin.position.set(0, 1.38, -0.2);
+    player.add(body, cabin);
+
+    const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.34, 18);
+    wheelGeo.rotateZ(Math.PI / 2);
+    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x121417, roughness: 0.85 });
+    [[-1.12, 0.42, 1.4], [1.12, 0.42, 1.4], [-1.12, 0.42, -1.4], [1.12, 0.42, -1.4]].forEach(([x, y, z]) => {
+      const w = new THREE.Mesh(wheelGeo, wheelMat);
+      w.position.set(x, y, z);
+      player.add(w);
+    });
+    scene.add(player);
+
+    const traffic = [];
+    const trafficColors = [0x3a86ff, 0xfb8500, 0x2ec4b6, 0xadb5bd, 0x8338ec];
+    for (let i = 0; i < 16; i++) {
+      const car = new THREE.Mesh(
+        new THREE.BoxGeometry(2.0, 1.1, 4.3),
+        new THREE.MeshStandardMaterial({ color: trafficColors[i % trafficColors.length], roughness: 0.35 })
+      );
+      const laneX = [-12, -4, 4, 12][i % 4];
+      car.position.set(laneX, 0.75, -i * 42 - 20);
+      scene.add(car);
+      traffic.push({ mesh: car, speed: 10 + (i % 4) * 3.5 });
+    }
+
+    const input = { gas: false, brake: false, left: false, right: false };
+    let speed = 0, heading = 0, camMode = 0, trafficLevel = 1, integrity = 100, wanted = 0;
+    const trafficModes = ['Low', 'High', 'Intense'];
+    const camNames = ['Chase', 'Hood', 'Cockpit'];
+
+    window.addEventListener('keydown', (e) => {
+      const k = e.key.toLowerCase();
+      if (k === 'w' || e.key === 'ArrowUp') input.gas = true;
+      if (k === 's' || e.key === 'ArrowDown') input.brake = true;
+      if (k === 'a' || e.key === 'ArrowLeft') input.left = true;
+      if (k === 'd' || e.key === 'ArrowRight') input.right = true;
+    });
+    window.addEventListener('keyup', (e) => {
+      const k = e.key.toLowerCase();
+      if (k === 'w' || e.key === 'ArrowUp') input.gas = false;
+      if (k === 's' || e.key === 'ArrowDown') input.brake = false;
+      if (k === 'a' || e.key === 'ArrowLeft') input.left = false;
+      if (k === 'd' || e.key === 'ArrowRight') input.right = false;
+    });
+
+    const bindHold = (id, key) => {
+      const el = document.getElementById(id);
+      el.addEventListener('pointerdown', () => input[key] = true);
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => el.addEventListener(ev, () => input[key] = false));
+    };
+    bindHold('btn-gas', 'gas'); bindHold('btn-brake', 'brake'); bindHold('btn-left', 'left'); bindHold('btn-right', 'right');
+
+    document.getElementById('cam-btn').onclick = () => { camMode = (camMode + 1) % 3; };
+    document.getElementById('traffic-btn').onclick = (e) => {
+      trafficLevel = (trafficLevel + 1) % 3;
+      e.target.textContent = `Traffic: ${trafficModes[trafficLevel]}`;
+    };
+    document.getElementById('repair-btn').onclick = () => {
+      integrity = 100;
+      document.getElementById('integrity').textContent = 'Integrity: 100%';
+    };
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    const clock = new THREE.Clock();
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = Math.min(clock.getDelta(), 0.05);
+
+      if (input.gas) speed += 42 * dt;
+      else if (input.brake) speed -= 48 * dt;
+      else speed *= Math.pow(0.25, dt);
+
+      speed = THREE.MathUtils.clamp(speed, -18, 68);
+      if (Math.abs(speed) > 0.4) {
+        const steerDir = (input.left ? 1 : 0) - (input.right ? 1 : 0);
+        heading += steerDir * 1.65 * dt * Math.sign(speed);
+      }
+
+      player.rotation.y = heading;
+      player.position.x -= Math.sin(heading) * speed * dt;
+      player.position.z -= Math.cos(heading) * speed * dt;
+      player.position.x = THREE.MathUtils.clamp(player.position.x, -19, 19);
+
+      const activeCount = [7, 12, 16][trafficLevel];
+      traffic.forEach((t, idx) => {
+        t.mesh.visible = idx < activeCount;
+        if (!t.mesh.visible) return;
+        t.mesh.position.z += t.speed * dt;
+        if (t.mesh.position.z > player.position.z + 60) t.mesh.position.z = player.position.z - 280 - idx * 14;
+        if (player.position.distanceTo(t.mesh.position) < 3.4) {
+          speed *= 0.45;
+          integrity = Math.max(0, Math.round(integrity - 6));
+          wanted = Math.min(5, wanted + 1);
+          document.getElementById('integrity').textContent = `Integrity: ${integrity}%`;
+          document.getElementById('wanted-stars').textContent = '★'.repeat(wanted) + '☆'.repeat(5 - wanted);
+        }
+      });
+
+      if (camMode === 0) {
+        camera.position.lerp(new THREE.Vector3(player.position.x + Math.sin(heading) * 9, player.position.y + 4.2, player.position.z + Math.cos(heading) * 9), 0.14);
+        camera.lookAt(player.position.x, player.position.y + 1.2, player.position.z - 8);
+      } else if (camMode === 1) {
+        camera.position.set(player.position.x, player.position.y + 1.45, player.position.z - 1.2);
+        camera.lookAt(player.position.x - Math.sin(heading) * 15, player.position.y + 1.1, player.position.z - Math.cos(heading) * 15);
+      } else {
+        camera.position.set(player.position.x, player.position.y + 1.68, player.position.z + 0.1);
+        camera.lookAt(player.position.x - Math.sin(heading) * 18, player.position.y + 1.35, player.position.z - Math.cos(heading) * 18);
+      }
+
+      document.getElementById('telemetry').textContent = `Speed: ${Math.round(Math.abs(speed) * 3.2)} km/h • Cam: ${camNames[camMode]} • Traffic: ${trafficModes[trafficLevel]}`;
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
+</body>
+</html>
 
